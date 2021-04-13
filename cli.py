@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import os
+import time
 import configparser
 import webbrowser
 from urllib.parse import urljoin
@@ -8,6 +9,8 @@ import arrow
 import click
 import attr
 import pymisp
+
+from rich.live import Live
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
@@ -181,9 +184,7 @@ def key_events(app):
     app.stdout.print(table)
 
 
-@main.command()
-@click.pass_obj
-def reports(app):
+def get_reports_table(app):
     threat_report_object_uuid = app.misp_config["threat_report_object_uuid"]
 
     table = Table(show_lines=True)
@@ -263,7 +264,19 @@ def reports(app):
             # attributes.get("actions-taken-and-results"),
         )
 
-    app.stdout.print(table)
+    return table
+
+
+@main.command()
+@click.option("--live/--no-live")
+@click.pass_obj
+def reports(app, live):
+    if live:
+        with Live(get_reports_table(app), refresh_per_second=4) as live:
+            while True:
+                live.update(get_reports_table(app))
+    else:
+        app.stdout.print(get_reports_table(app))
 
 
 @main.command()
@@ -290,7 +303,7 @@ def feedback(app, event_id):
 
     # Create event
     feedback_event = pymisp.MISPEvent()
-    feedback_event.info = "Yellow team feedback"
+    feedback_event.info = f"More info required: {original_event.info}"
     feedback_event.extends_uuid = original_event.uuid
     feedback_event.distribution = DISTRIBUTION_SHARING_GROUP
     feedback_event.sharing_group_id = app.orgs_with_sharing_groups[
@@ -303,11 +316,12 @@ def feedback(app, event_id):
         feedback_event, app.misp_config["info_request_tag_id"], local=False
     )
     app.misp.tag(
-        feedback_event, app.misp_config["approved_tag_id"], local=False
+        feedback_event, app.misp_config["approved_tag_id"], local=True
     )
 
     # Add attributes
     message = click.edit()
+
     attribute = pymisp.MISPAttribute()
     attribute.category = "Other"
     attribute.type = "comment"
