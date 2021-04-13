@@ -274,6 +274,7 @@ def reports(app, live):
     if live:
         with Live(get_reports_table(app), refresh_per_second=4) as live:
             while True:
+                time.sleep(5)
                 live.update(get_reports_table(app))
     else:
         app.stdout.print(get_reports_table(app))
