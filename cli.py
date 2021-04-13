@@ -92,7 +92,6 @@ def tags(app):
 def key_events(app):
     key_event_object_uuid = app.misp_config["key_event_object_uuid"]
 
-    from rich import box
     table = Table(show_lines=True)
     table.add_column("ID", justify="right")
     table.add_column("Team", no_wrap=True)
@@ -119,6 +118,7 @@ def key_events(app):
             updated.stylize("bold magenta")
         else:
             updated = ""
+        published = published.format(DATETIME_FORMAT)
 
         # Attributes
         attributes = {}
@@ -131,8 +131,6 @@ def key_events(app):
             # Error, handle?
             pass
 
-        published = published.format(DATETIME_FORMAT)
-
         # Row
         table.add_row(
             e["id"],
@@ -143,6 +141,65 @@ def key_events(app):
             attributes.get("capability"),
             attributes.get("impact-on-capability"),
             attributes.get("event-status"),
+            # attributes.get("overview"),
+            # attributes.get("actions-taken-and-results"),
+        )
+
+    app.console.print(table)
+
+
+@main.command()
+@click.pass_obj
+def reports(app):
+    threat_report_object_uuid = app.misp_config["threat_report_object_uuid"]
+
+    table = Table(show_lines=True)
+    table.add_column("ID", justify="right")
+    table.add_column("Team", no_wrap=True)
+    table.add_column("Published", no_wrap=True)
+    table.add_column("Updated", no_wrap=True)
+    table.add_column("Name")
+    # table.add_column("Capability")
+    # table.add_column("Impact")
+    # table.add_column("Status")
+
+    for e in app.misp.search(
+        org=app.orgs_to_review, tags=[app.misp_config["threat_report_tag_id"]]
+    ):
+        e = e["Event"]
+
+        # Timestamps
+        published = arrow.get(int(e["publish_timestamp"]))
+        updated = arrow.get(int(e["timestamp"]))
+
+        if updated > published:
+            updated = Text(updated.format(DATETIME_FORMAT))
+            updated.stylize("bold magenta")
+        else:
+            updated = ""
+        published = published.format(DATETIME_FORMAT)
+
+        # Attributes
+        attributes = {}
+        for obj in e["Object"]:
+            if obj["template_uuid"] == threat_report_object_uuid:
+                for a in obj["Attribute"]:
+                    attributes[a["object_relation"]] = a["value"]
+                break
+        else:
+            # Error, handle?
+            pass
+
+        # Row
+        table.add_row(
+            e["id"],
+            e["Org"]["name"],
+            published,
+            updated,
+            e["info"],
+            # attributes.get("capability"),
+            # attributes.get("impact-on-capability"),
+            # attributes.get("event-status"),
             # attributes.get("overview"),
             # attributes.get("actions-taken-and-results"),
         )
