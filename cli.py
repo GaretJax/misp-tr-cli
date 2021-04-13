@@ -89,7 +89,7 @@ def orgs(app):
     table = Table()
     table.add_column("ID", justify="right")
     table.add_column("Name", no_wrap=True)
-    table.add_column("Sharing groups", no_wrap=True)
+    table.add_column("Sharing groups")
 
     sharing_groups = {}
     for g in app.misp.sharing_groups():
