@@ -2,6 +2,7 @@
 import os
 import time
 import configparser
+import logging
 import webbrowser
 from urllib.parse import urljoin
 
@@ -65,6 +66,9 @@ class App:
 )
 @click.pass_context
 def main(ctx, misp_configfile, misp_profile):
+    logger = logging.getLogger('pymisp')
+    logger.disabled = True
+
     stdout = Console()
     stderr = Console(stderr=True)
 
@@ -189,10 +193,11 @@ def get_reports_table(app):
 
     table = Table(show_lines=True)
     table.add_column("ID", justify="right")
-    table.add_column("Team", no_wrap=True)
     table.add_column("Published", no_wrap=True)
     table.add_column("Updated", no_wrap=True)
     table.add_column("Status")
+    table.add_column("Team", no_wrap=True)
+    table.add_column("Key event", no_wrap=True)
     table.add_column("Name")
     # table.add_column("Capability")
     # table.add_column("Impact")
@@ -215,6 +220,16 @@ def get_reports_table(app):
         else:
             updated = ""
         published = published.format(DATETIME_FORMAT)
+
+        # Key event
+        key_event_uuid = e.get("extends_uuid")
+        key_event = None
+        if key_event_uuid:
+            key_event = app.misp.get_event(key_event_uuid)
+            if "Event" in key_event:
+                key_event = key_event["Event"]["id"]
+            else:
+                key_event = None
 
         # Attributes
         attributes = {}
@@ -252,10 +267,11 @@ def get_reports_table(app):
         # Row
         table.add_row(
             e["id"],
-            e["Org"]["name"],
             published,
             updated,
             status,
+            e["Org"]["name"],
+            key_event,
             e["info"],
             # attributes.get("capability"),
             # attributes.get("impact-on-capability"),
