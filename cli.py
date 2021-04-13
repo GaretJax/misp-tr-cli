@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 import os
-
 import configparser
+import webbrowser
+from urllib.parse import urljoin
 
 import arrow
 import click
@@ -85,6 +86,14 @@ def tags(app):
         table.add_row(obj["id"], obj["name"])
 
     app.console.print(table)
+
+
+@main.command()
+@click.pass_obj
+@click.argument("event_id", type=int)
+def browse(app, event_id):
+    url = urljoin(app.misp_config["endpoint"], f"events/view/{event_id}")
+    webbrowser.open(url)
 
 
 @main.command()
