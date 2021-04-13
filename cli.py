@@ -3,15 +3,18 @@ import os
 
 import configparser
 
+import arrow
 import click
 import attr
 import pymisp
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 
 DEFAULT_MISP_CONFIGFILE = os.path.expanduser("~/.config/misp")
 DEFAULT_MISP_PROFILE = "default"
+DATETIME_FORMAT = "MM/DD HHMM[Z]"
 
 
 @attr.s
@@ -87,17 +90,62 @@ def tags(app):
 @main.command()
 @click.pass_obj
 def key_events(app):
-    table = Table()
+    key_event_object_uuid = app.misp_config["key_event_object_uuid"]
+
+    from rich import box
+    table = Table(show_lines=True)
     table.add_column("ID", justify="right")
     table.add_column("Team", no_wrap=True)
+    table.add_column("Published", no_wrap=True)
+    table.add_column("Updated", no_wrap=True)
     table.add_column("Name")
+    table.add_column("Capability")
+    table.add_column("Impact")
+    table.add_column("Status")
+    # table.add_column("Overview")
+    # table.add_column("Actions & Results")
 
     for e in app.misp.search(
         org=app.orgs_to_review, tags=[app.misp_config["key_event_tag_id"]]
     ):
         e = e["Event"]
-        table.add_row(e["id"], e["info"], e["Org"]["name"])
-        # app.console.print(e)
+
+        # Timestamps
+        published = arrow.get(int(e["publish_timestamp"]))
+        updated = arrow.get(int(e["timestamp"]))
+
+        if updated > published:
+            updated = Text(updated.format(DATETIME_FORMAT))
+            updated.stylize("bold magenta")
+        else:
+            updated = ""
+
+        # Attributes
+        attributes = {}
+        for obj in e["Object"]:
+            if obj["template_uuid"] == key_event_object_uuid:
+                for a in obj["Attribute"]:
+                    attributes[a["object_relation"]] = a["value"]
+                break
+        else:
+            # Error, handle?
+            pass
+
+        published = published.format(DATETIME_FORMAT)
+
+        # Row
+        table.add_row(
+            e["id"],
+            e["Org"]["name"],
+            published,
+            updated,
+            e["info"],
+            attributes.get("capability"),
+            attributes.get("impact-on-capability"),
+            attributes.get("event-status"),
+            # attributes.get("overview"),
+            # attributes.get("actions-taken-and-results"),
+        )
 
     app.console.print(table)
 
