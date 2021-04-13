@@ -174,8 +174,11 @@ def reports(app):
     # table.add_column("Status")
 
     for e in app.misp.search(
-        org=app.orgs_to_review, tags=[app.misp_config["threat_report_tag_id"]]
+        org=app.orgs_to_review,
+        tags=[app.misp_config["threat_report_tag_id"]],
+        include_context=True,
     ):
+        e2 = e
         e = e["Event"]
 
         # Timestamps
@@ -201,13 +204,26 @@ def reports(app):
             pass
 
         # Status
-        status = ""
         tags = {t["id"] for t in e["Tag"]}
 
         approved = app.misp_config["approved_tag_id"] in tags
 
+        status = Text("New", style="yellow bold")
         if approved:
-            status = Text("Approved", style="green bold")
+            status = Text("Approved", style="green")
+        else:
+            e = app.misp.get_event(e["id"], extended=True)["Event"]
+            for subevent in e.get("extensionEvents", {}).values():
+                if subevent["Orgc"]["id"] != app.misp_config["yt_org_id"]:
+                    continue
+                se = app.misp.get_event(subevent["id"])["Event"]
+                subtags = {t["id"] for t in se["Tag"]}
+                info_requested = (
+                    app.misp_config["info_request_tag_id"] in subtags
+                )
+                if info_requested:
+                    status = Text("Info requested", style="red")
+                    break
 
         # Row
         table.add_row(
@@ -223,9 +239,6 @@ def reports(app):
             # attributes.get("overview"),
             # attributes.get("actions-taken-and-results"),
         )
-
-        if e["id"] == "57":
-            app.console.print(e)
 
     app.console.print(table)
 
