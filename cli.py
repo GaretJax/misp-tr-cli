@@ -16,6 +16,7 @@ from rich.text import Text
 DEFAULT_MISP_CONFIGFILE = os.path.expanduser("~/.config/misp")
 DEFAULT_MISP_PROFILE = "default"
 DATETIME_FORMAT = "MM/DD HHMM[Z]"
+DISTRIBUTION_SHARING_GROUP = 4
 
 
 @attr.s
@@ -28,16 +29,22 @@ class App:
 
     @property
     def orgs_to_review(self):
-        return [
-            int(o.strip())
-            for o in self.misp_config["orgs_to_review_ids"]
-            .strip()
-            .splitlines()
-        ]
+        return list(self.orgs_with_sharing_groups.keys())
 
-    def abort(self, error_message=None, code=1):
+    @property
+    def orgs_with_sharing_groups(self):
+        return dict(
+            [
+                [int(id) for id in o.strip().split(":")]
+                for o in self.misp_config["orgs_to_review_ids"]
+                .strip()
+                .splitlines()
+            ]
+        )
+
+    def abort(self, error_message=None, code=1, style="red bold"):
         if error_message:
-            self.stderr.print(error_message, style="red bold")
+            self.stderr.print(error_message, style=style)
         self._click_context.exit(code=code)
 
 
@@ -75,10 +82,19 @@ def orgs(app):
     table = Table()
     table.add_column("ID", justify="right")
     table.add_column("Name", no_wrap=True)
+    table.add_column("Sharing groups", no_wrap=True)
 
-    for obj in app.misp.organisations():
-        org = obj["Organisation"]
-        table.add_row(org["id"], org["name"])
+    sharing_groups = {}
+    for g in app.misp.sharing_groups():
+        for sg in g["SharingGroupOrg"]:
+            sharing_groups.setdefault(sg["org_id"], set()).add(
+                sg["sharing_group_id"]
+            )
+
+    for org in app.misp.organisations(pythonify=True):
+        table.add_row(
+            org.id, org.name, ", ".join(sharing_groups.get(org.id, []))
+        )
 
     app.stdout.print(table)
 
@@ -211,7 +227,7 @@ def reports(app):
             pass
 
         # Status
-        tags = {t["id"] for t in e["Tag"]}
+        tags = {t["id"] for t in e.get("Tag", [])}
 
         approved = app.misp_config["approved_tag_id"] in tags
 
@@ -224,7 +240,7 @@ def reports(app):
                 if subevent["Orgc"]["id"] != app.misp_config["yt_org_id"]:
                     continue
                 se = app.misp.get_event(subevent["id"])["Event"]
-                subtags = {t["id"] for t in se["Tag"]}
+                subtags = {t["id"] for t in se.get("Tag", [])}
                 info_requested = (
                     app.misp_config["info_request_tag_id"] in subtags
                 )
@@ -261,10 +277,48 @@ def approve(app, event_id):
         app.abort("This event is not a threat report.")
 
     if app.misp_config["approved_tag_id"] in tags:
-        app.abort("This event was already approved.")
+        app.abort("This event is already approved.", style="yellow")
 
+    app.misp.tag(event["uuid"], app.misp_config["approved_tag_id"], local=True)
+
+
+@main.command()
+@click.pass_obj
+@click.argument("event_id", type=int)
+def feedback(app, event_id):
+    original_event = app.misp.get_event(event_id, pythonify=True)
+
+    # Create event
+    feedback_event = pymisp.MISPEvent()
+    feedback_event.info = "Yellow team feedback"
+    feedback_event.extends_uuid = original_event.uuid
+    feedback_event.distribution = DISTRIBUTION_SHARING_GROUP
+    feedback_event.sharing_group_id = app.orgs_with_sharing_groups[
+        original_event.org_id
+    ]
+    feedback_event = app.misp.add_event(feedback_event, pythonify=True)
+
+    # Add tags
     app.misp.tag(
-        event["uuid"], app.misp_config["approved_tag_id"], local=True
+        feedback_event, app.misp_config["info_request_tag_id"], local=False
+    )
+    app.misp.tag(
+        feedback_event, app.misp_config["approved_tag_id"], local=False
+    )
+
+    # Add attributes
+    message = click.edit()
+    attribute = pymisp.MISPAttribute()
+    attribute.category = "Other"
+    attribute.type = "comment"
+    attribute.value = message
+    app.misp.add_attribute(feedback_event, attribute)
+
+    # Publish
+    app.misp.publish(feedback_event)
+
+    app.stdout.print(
+        f"Sent feedback via event {feedback_event.id}", style="green"
     )
 
 
