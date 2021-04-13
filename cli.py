@@ -167,6 +167,7 @@ def reports(app):
     table.add_column("Team", no_wrap=True)
     table.add_column("Published", no_wrap=True)
     table.add_column("Updated", no_wrap=True)
+    table.add_column("Status")
     table.add_column("Name")
     # table.add_column("Capability")
     # table.add_column("Impact")
@@ -199,12 +200,22 @@ def reports(app):
             # Error, handle?
             pass
 
+        # Status
+        status = ""
+        tags = {t["id"] for t in e["Tag"]}
+
+        approved = app.misp_config["approved_tag_id"] in tags
+
+        if approved:
+            status = Text("Approved", style="green bold")
+
         # Row
         table.add_row(
             e["id"],
             e["Org"]["name"],
             published,
             updated,
+            status,
             e["info"],
             # attributes.get("capability"),
             # attributes.get("impact-on-capability"),
@@ -212,6 +223,9 @@ def reports(app):
             # attributes.get("overview"),
             # attributes.get("actions-taken-and-results"),
         )
+
+        if e["id"] == "57":
+            app.console.print(e)
 
     app.console.print(table)
 
