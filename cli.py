@@ -317,6 +317,8 @@ def approve(app, event_id):
 @click.argument("event_id", type=int)
 def feedback(app, event_id):
     original_event = app.misp.get_event(event_id, pythonify=True)
+    if app.misp_config["threat_report_tag_id"] not in tags:
+        app.abort("This event is not a threat report.")
 
     # Create event
     feedback_event = pymisp.MISPEvent()
@@ -339,6 +341,8 @@ def feedback(app, event_id):
     # Add attributes
     message = click.edit()
 
+    if not message:
+        app.abort("Feedback request aborted.")
     attribute = pymisp.MISPAttribute()
     attribute.category = "Other"
     attribute.type = "comment"
