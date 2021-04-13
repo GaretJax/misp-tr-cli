@@ -17,7 +17,17 @@ DEFAULT_MISP_PROFILE = "default"
 @attr.s
 class App:
     console = attr.ib()
+    misp_config = attr.ib()
     misp = attr.ib()
+
+    @property
+    def orgs_to_review(self):
+        return [
+            int(o.strip())
+            for o in self.misp_config["orgs_to_review_ids"]
+            .strip()
+            .splitlines()
+        ]
 
 
 @click.group()
@@ -36,14 +46,15 @@ class App:
 def main(ctx, misp_configfile, misp_profile):
     console = Console()
 
-    misp_creds = configparser.ConfigParser()
-    misp_creds.read_file(misp_configfile)
+    misp_config = configparser.ConfigParser()
+    misp_config.read_file(misp_configfile)
+    misp_config = misp_config[misp_profile]
 
-    misp_endpoint = misp_creds[misp_profile]["endpoint"]
-    misp_api_key = misp_creds[misp_profile]["api_key"]
+    misp_endpoint = misp_config["endpoint"]
+    misp_api_key = misp_config["api_key"]
     misp_client = pymisp.PyMISP(misp_endpoint, misp_api_key)
 
-    ctx.obj = App(console, misp_client)
+    ctx.obj = App(console, misp_config, misp_client)
 
 
 @main.command()
@@ -53,8 +64,8 @@ def orgs(app):
     table.add_column("ID", justify="right")
     table.add_column("Name", no_wrap=True)
 
-    for org in app.misp.organisations():
-        org = org["Organisation"]
+    for obj in app.misp.organisations():
+        org = obj["Organisation"]
         table.add_row(org["id"], org["name"])
 
     app.console.print(table)
@@ -62,29 +73,33 @@ def orgs(app):
 
 @main.command()
 @click.pass_obj
-def reviewable(app):
-    events = app.misp.search(org=[20, 11, 5, 18, 27], tags=[28])
+def tags(app):
+    table = Table()
+    table.add_column("ID", justify="right")
+    table.add_column("Name", no_wrap=True)
 
-    for e in events:
+    for obj in app.misp.tags():
+        table.add_row(obj["id"], obj["name"])
+
+    app.console.print(table)
+
+
+@main.command()
+@click.pass_obj
+def key_events(app):
+    table = Table()
+    table.add_column("ID", justify="right")
+    table.add_column("Team", no_wrap=True)
+    table.add_column("Name")
+
+    for e in app.misp.search(
+        org=app.orgs_to_review, tags=[app.misp_config["key_event_tag_id"]]
+    ):
         e = e["Event"]
+        table.add_row(e["id"], e["info"], e["Org"]["name"])
+        # app.console.print(e)
 
-        to_review = True
-
-        for t in e.get("Tag"):
-            if t["name"] == "yt_info_request":
-                # Check if additional information has been provided
-                import ipdb
-
-                ipdb.set_trace()
-                to_review = False
-                break
-            elif t["name"] == "yt_approved_event":
-                to_review = False
-
-        if not to_review:
-            continue
-
-        print(e["Org"]["name"], e["info"])
+    app.console.print(table)
 
 
 if __name__ == "__main__":
