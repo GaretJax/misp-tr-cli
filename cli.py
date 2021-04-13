@@ -317,6 +317,7 @@ def approve(app, event_id):
 @click.argument("event_id", type=int)
 def feedback(app, event_id):
     original_event = app.misp.get_event(event_id, pythonify=True)
+    tags = {t.id for t in original_event.tags}
     if app.misp_config["threat_report_tag_id"] not in tags:
         app.abort("This event is not a threat report.")
 
