@@ -19,7 +19,7 @@ from rich.text import Text
 
 DEFAULT_MISP_CONFIGFILE = os.path.expanduser("~/.config/misp")
 DEFAULT_MISP_PROFILE = "default"
-DATETIME_FORMAT = "MM/DD HHMM[Z]"
+DATETIME_FORMAT = "MM/DD HHmm[Z]"
 DISTRIBUTION_OWN_ORG_ONLY = 0
 DISTRIBUTION_SHARING_GROUP = 4
 
