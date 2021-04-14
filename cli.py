@@ -6,7 +6,7 @@ import configparser
 import logging
 import webbrowser
 from urllib.parse import urljoin
-import enum
+import statistics
 
 import arrow
 import click
@@ -229,7 +229,7 @@ class ThreatReport:
 
     @property
     def scores(self):
-        return [s[1] for s in sorted(self._scores)]
+        return [int(s[1]) for s in sorted(self._scores)]
 
     @property
     def org_name(self):
@@ -250,6 +250,17 @@ class ThreatReport:
     @property
     def formatted_status(self):
         return self.STATUSES[self.status]
+
+    @property
+    def overall_score(self):
+        if not self.scores:
+            return None
+        weight = sum(i + 1 for i in range(len(self.scores)))
+        score = (
+            sum((i + 1) * s for i, s in enumerate(reversed(self.scores)))
+            / weight
+        )
+        return score
 
 
 def get_reports(
@@ -326,11 +337,15 @@ def get_reports(
                         obj["template_uuid"]
                         == app.misp_config["scoring_object_uuid"]
                     ):
+                        score = None
+                        comment = ""
                         for a in obj["Attribute"]:
                             if a["object_relation"] == "score":
-                                scores.append(
-                                    (int(a["timestamp"]), a["value"])
-                                )
+                                score = a["value"]
+                            elif a["object_relation"] == "comment":
+                                comment = a["value"]
+
+                        scores.append((int(obj["timestamp"]), score, comment))
 
         if approved:
             status = "approved"
@@ -372,9 +387,6 @@ def get_reports_table(
     table.add_column("Team", no_wrap=True)
     table.add_column("Key event", no_wrap=True)
     table.add_column("Name")
-    # table.add_column("Capability")
-    # table.add_column("Impact")
-    # table.add_column("Status")
 
     for report in get_reports(app, orgs, only, since, until, require_score):
         # Row
@@ -383,7 +395,7 @@ def get_reports_table(
             report.published,
             report.updated,
             report.formatted_status,
-            ", ".join(report.scores),
+            ", ".join(str(s) for s in report.scores),
             report.org_name,
             report.key_event_id,
             report.title,
@@ -438,8 +450,65 @@ def reports(app, team, live, only, since, until, unscored, scored):
 
 
 @main.command()
+@click.option(
+    "--since",
+    type=TimestampType(),
+    help="Only list events modified since the given time",
+)
+@click.option(
+    "--until",
+    type=TimestampType(),
+    help="Only list events published before the given time",
+)
+@click.argument("team_id", type=int)
 @click.pass_obj
+def team_report(app, team_id, since, until):
+    table = Table(show_lines=True)
+    table.add_column("ID", justify="right")
+    table.add_column("Key event", no_wrap=True)
+    table.add_column("Status")
+    table.add_column("Scores", justify="right")
+    table.add_column("Comments")
+
+    reports_by_status = {k: 0 for k in ThreatReport.STATUSES}
+    scores = []
+
+    for report in get_reports(app, [team_id], since=since, until=until):
+        reports_by_status[report.status] += 1
+        table.add_row(
+            report.id,
+            report.key_event_id,
+            report.formatted_status,
+            ", ".join(str(s) for s in report.scores),
+            "\n".join(s[2] for s in report._scores),
+        )
+        if report.overall_score is not None:
+            scores.append(report.overall_score)
+
+    app.stdout.print(table)
+
+    table = Table(show_footer=True)
+    table.add_column("Status", footer="Total")
+    table.add_column(
+        "Reports", justify="right", footer=str(sum(reports_by_status.values()))
+    )
+    for k, v in reports_by_status.items():
+        table.add_row(ThreatReport.STATUSES[k], str(v))
+    app.stdout.print(table)
+
+    if scores:
+        table = Table(show_header=False)
+        table.add_column()
+        table.add_column()
+        table.add_row("Average", "{:.2f}".format(sum(scores) / len(scores)))
+        table.add_row("Median", "{:.2f}".format(statistics.median(scores)))
+        table.add_row("Stdev", "{:.2f}".format(statistics.stdev(scores)))
+        app.stdout.print(table)
+
+
+@main.command()
 @click.argument("event_id", type=int)
+@click.pass_obj
 def approve(app, event_id):
     event = app.misp.get_event(event_id)["Event"]
     tags = {t["id"] for t in event["Tag"]}
