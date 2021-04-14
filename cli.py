@@ -244,22 +244,13 @@ def get_reports_table(app):
             # Error, handle?
             pass
 
-        # TODO: Use object instead
-        for a in e["Attribute"]:
-            if a["type"] == "float" and a["sharing_group_id"] == str(
-                DISTRIBUTION_OWN_ORG_ONLY
-            ):
-                score = int(a["value"])
-                break
-        else:
-            score = None
-
         # Status
         tags = {t["id"] for t in e.get("Tag", [])}
 
         approved = app.misp_config["approved_tag_id"] in tags
 
         status = Text("New", style="yellow bold")
+        score = None
         if approved:
             status = Text("Approved", style="green")
         else:
@@ -274,7 +265,17 @@ def get_reports_table(app):
                 )
                 if info_requested:
                     status = Text("Info requested", style="red")
-                    break
+
+                scored = app.misp_config["score_tag_id"] in subtags
+                if scored:
+                    for obj in se["Object"]:
+                        if (
+                            obj["template_uuid"]
+                            == app.misp_config["scoring_object_uuid"]
+                        ):
+                            for a in obj["Attribute"]:
+                                if a["object_relation"] == "score":
+                                    score = a["value"]
 
         # Row
         table.add_row(
@@ -340,9 +341,7 @@ def feedback(app, event_id):
 
     # Create event
     feedback_event = pymisp.MISPEvent()
-    feedback_event.info = (
-        f"Info request: {original_event.info}"
-    )
+    feedback_event.info = f"Info request: {original_event.info}"
     feedback_event.extends_uuid = original_event.uuid
     feedback_event.distribution = DISTRIBUTION_SHARING_GROUP
     feedback_event.sharing_group_id = app.orgs_with_sharing_groups[
@@ -377,14 +376,14 @@ def feedback(app, event_id):
 @click.pass_obj
 @click.argument("event_id")
 def score(app, event_id):
-    event = app.misp.get_event(event_id, pythonify=True)
-    tags = {t.id for t in event.tags}
+    original_event = app.misp.get_event(event_id, pythonify=True)
+    tags = {t.id for t in original_event.tags}
     if app.misp_config["threat_report_tag_id"] not in tags:
         app.abort("This event is not a threat report.")
 
     # TODO: Check and update attributes if they exist already
 
-    # Add attributes
+    # Get data
     scorevalue = click.prompt(
         "Please enter a score between 0 (worst) and 12 (best)", type=int
     )
@@ -393,21 +392,28 @@ def score(app, event_id):
     if justification is None:
         app.abort("Scoring aborted.")
 
-    score = pymisp.MISPAttribute()
-    score.category = "Other"
-    score.type = "float"
-    score.value = scorevalue
-    score.distribution = DISTRIBUTION_OWN_ORG_ONLY
-    app.misp.add_attribute(event, score)
+    # Create data structures
+    scoring_event = pymisp.MISPEvent()
+    scoring_event.info = (
+        f"Scoring TR-{original_event.id}: {original_event.info}"
+    )
+    scoring_event.extends_uuid = original_event.uuid
+    scoring_event.distribution = DISTRIBUTION_OWN_ORG_ONLY
 
-    comment = pymisp.MISPAttribute()
-    comment.category = "Other"
-    comment.type = "comment"
-    comment.value = justification
-    comment.distribution = DISTRIBUTION_OWN_ORG_ONLY
-    app.misp.add_attribute(event, comment)
+    scoring_object = pymisp.MISPObject("ls21-scoring-object")
+    scoring_object.template_uuid = app.misp_config["scoring_object_uuid"]
+    scoring_object.template_version = 1
+    scoring_object.add_attribute("score", scorevalue, type="float")
+    scoring_object.add_attribute("comment", justification, type="text")
 
-    app.stdout.print(f"Score added for event {event.id}", style="green")
+    # Sync to MISP
+    scoring_event = app.misp.add_event(scoring_event, pythonify=True)
+    app.misp.tag(scoring_event, app.misp_config["score_tag_id"], local=False)
+    app.misp.add_object(scoring_event, scoring_object)
+
+    app.stdout.print(
+        f"Score added for event {original_event.id}", style="green"
+    )
 
 
 if __name__ == "__main__":
