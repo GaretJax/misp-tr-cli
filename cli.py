@@ -20,6 +20,7 @@ from rich.text import Text
 DEFAULT_MISP_CONFIGFILE = os.path.expanduser("~/.config/misp")
 DEFAULT_MISP_PROFILE = "default"
 DATETIME_FORMAT = "MM/DD HHMM[Z]"
+DISTRIBUTION_OWN_ORG_ONLY = 0
 DISTRIBUTION_SHARING_GROUP = 4
 
 
@@ -196,6 +197,7 @@ def get_reports_table(app):
     table.add_column("Published", no_wrap=True)
     table.add_column("Updated", no_wrap=True)
     table.add_column("Status")
+    table.add_column("Score", justify="right")
     table.add_column("Team", no_wrap=True)
     table.add_column("Key event", no_wrap=True)
     table.add_column("Name")
@@ -242,6 +244,16 @@ def get_reports_table(app):
             # Error, handle?
             pass
 
+        # TODO: Use object instead
+        for a in e["Attribute"]:
+            if a["type"] == "float" and a["sharing_group_id"] == str(
+                DISTRIBUTION_OWN_ORG_ONLY
+            ):
+                score = int(a["value"])
+                break
+        else:
+            score = None
+
         # Status
         tags = {t["id"] for t in e.get("Tag", [])}
 
@@ -270,6 +282,7 @@ def get_reports_table(app):
             published,
             updated,
             status,
+            str(score) if score else "",
             e["Org"]["name"],
             key_event,
             e["info"],
@@ -358,6 +371,43 @@ def feedback(app, event_id):
     app.stdout.print(
         f"Sent feedback via event {feedback_event.id}", style="green"
     )
+
+
+@main.command()
+@click.pass_obj
+@click.argument("event_id")
+def score(app, event_id):
+    event = app.misp.get_event(event_id, pythonify=True)
+    tags = {t.id for t in event.tags}
+    if app.misp_config["threat_report_tag_id"] not in tags:
+        app.abort("This event is not a threat report.")
+
+    # TODO: Check and update attributes if they exist already
+
+    # Add attributes
+    scorevalue = click.prompt(
+        "Please enter a score between 0 (worst) and 12 (best)", type=int
+    )
+
+    justification = click.edit()
+    if justification is None:
+        app.abort("Scoring aborted.")
+
+    score = pymisp.MISPAttribute()
+    score.category = "Other"
+    score.type = "float"
+    score.value = scorevalue
+    score.distribution = DISTRIBUTION_OWN_ORG_ONLY
+    app.misp.add_attribute(event, score)
+
+    comment = pymisp.MISPAttribute()
+    comment.category = "Other"
+    comment.type = "comment"
+    comment.value = justification
+    comment.distribution = DISTRIBUTION_OWN_ORG_ONLY
+    app.misp.add_attribute(event, comment)
+
+    app.stdout.print(f"Score added for event {event.id}", style="green")
 
 
 if __name__ == "__main__":
