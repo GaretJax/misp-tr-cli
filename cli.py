@@ -334,10 +334,14 @@ def feedback(app, event_id):
     if app.misp_config["threat_report_tag_id"] not in tags:
         app.abort("This event is not a threat report.")
 
+    message = click.edit()
+    if message is None:
+        app.abort("Feedback request aborted.")
+
     # Create event
     feedback_event = pymisp.MISPEvent()
     feedback_event.info = (
-        f"Info request for TR-{original_event.id}: {original_event.info}"
+        f"Info request: {original_event.info}"
     )
     feedback_event.extends_uuid = original_event.uuid
     feedback_event.distribution = DISTRIBUTION_SHARING_GROUP
@@ -355,10 +359,6 @@ def feedback(app, event_id):
     )
 
     # Add attributes
-    message = click.edit()
-    if message is None:
-        app.abort("Feedback request aborted.")
-
     attribute = pymisp.MISPAttribute()
     attribute.category = "Other"
     attribute.type = "comment"
