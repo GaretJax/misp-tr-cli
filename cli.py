@@ -6,6 +6,7 @@ import configparser
 import logging
 import webbrowser
 from urllib.parse import urljoin
+import enum
 
 import arrow
 import click
@@ -206,26 +207,58 @@ def key_events(app):
     app.stdout.print(table)
 
 
-def get_reports_table(
-    app, only=None, since=None, until=None, require_score=None
+@attr.s
+class ThreatReport:
+    _event = attr.ib()
+    _scores = attr.ib()
+    status = attr.ib()
+    _key_event = attr.ib()
+    published = attr.ib()
+    updated = attr.ib()
+
+    STATUSES = {
+        "new": Text("New", style="yellow bold"),
+        "info-requested": Text("Info requested", style="red"),
+        "updated": Text("Updated", style="blue bold"),
+        "approved": Text("Approved", style="green"),
+    }
+
+    @property
+    def id(self):
+        return self._event["id"]
+
+    @property
+    def scores(self):
+        return [s[1] for s in sorted(self._scores)]
+
+    @property
+    def org_name(self):
+        return self._event["Org"]["name"]
+
+    @property
+    def title(self):
+        return self._event["info"]
+
+    @property
+    def is_scored(self):
+        return bool(self._scores)
+
+    @property
+    def key_event_id(self):
+        return self._key_event["id"] if self._key_event else None
+
+    @property
+    def formatted_status(self):
+        return self.STATUSES[self.status]
+
+
+def get_reports(
+    app, orgs, only=None, since=None, until=None, require_score=None
 ):
     threat_report_object_uuid = app.misp_config["threat_report_object_uuid"]
 
-    table = Table(show_lines=True)
-    table.add_column("ID", justify="right")
-    table.add_column("Published", no_wrap=True)
-    table.add_column("Updated", no_wrap=True)
-    table.add_column("Status")
-    table.add_column("Score", justify="right")
-    table.add_column("Team", no_wrap=True)
-    table.add_column("Key event", no_wrap=True)
-    table.add_column("Name")
-    # table.add_column("Capability")
-    # table.add_column("Impact")
-    # table.add_column("Status")
-
     for e in app.misp.search(
-        org=app.orgs_to_review,
+        org=orgs,
         tags=[app.misp_config["threat_report_tag_id"]],
         include_context=True,
     ):
@@ -241,7 +274,7 @@ def get_reports_table(
         if key_event_uuid:
             key_event = app.misp.get_event(key_event_uuid)
             if "Event" in key_event:
-                key_event = key_event["Event"]["id"]
+                key_event = key_event["Event"]
             else:
                 key_event = None
 
@@ -264,14 +297,13 @@ def get_reports_table(
         if until and published > until:
             continue
 
-        # Status
         tags = {t["id"] for t in e.get("Tag", [])}
 
         approved = app.misp_config["approved_tag_id"] in tags
         if only and approved and "approved" not in only:
             continue
 
-        status = Text("New", style="yellow bold")
+        status = "new"
         scores = []
         e = app.misp.get_event(e["id"], extended=True)["Event"]
         for subevent in e.get("extensionEvents", {}).values():
@@ -283,9 +315,9 @@ def get_reports_table(
             if info_requested:
                 info_requested_at = arrow.get(int(se["publish_timestamp"]))
                 if info_requested_at > updated:
-                    status = Text("Info requested", style="red")
+                    status = "info-requested"
                 else:
-                    status = Text("Updated", style="blue bold")
+                    status = "updated"
 
             scored = app.misp_config["score_tag_id"] in subtags
             if scored:
@@ -300,10 +332,8 @@ def get_reports_table(
                                     (int(a["timestamp"]), a["value"])
                                 )
 
-        scores = [s[1] for s in sorted(scores)]
-
         if approved:
-            status = Text("Approved", style="green")
+            status = "approved"
 
         if updated > published:
             updated = Text(updated.format(DATETIME_FORMAT))
@@ -312,8 +342,7 @@ def get_reports_table(
             updated = ""
         published = published.format(DATETIME_FORMAT)
 
-        status_key = status.plain.lower().replace(" ", "-")
-        if only and status_key not in only:
+        if only and status not in only:
             continue
 
         if require_score is True and not scores:
@@ -321,21 +350,43 @@ def get_reports_table(
         elif require_score is False and scores:
             continue
 
+        yield ThreatReport(
+            event=e,
+            key_event=key_event,
+            published=published,
+            updated=updated,
+            status=status,
+            scores=scores,
+        )
+
+
+def get_reports_table(
+    app, orgs, only=None, since=None, until=None, require_score=None
+):
+    table = Table(show_lines=True)
+    table.add_column("ID", justify="right")
+    table.add_column("Published", no_wrap=True)
+    table.add_column("Updated", no_wrap=True)
+    table.add_column("Status")
+    table.add_column("Score", justify="right")
+    table.add_column("Team", no_wrap=True)
+    table.add_column("Key event", no_wrap=True)
+    table.add_column("Name")
+    # table.add_column("Capability")
+    # table.add_column("Impact")
+    # table.add_column("Status")
+
+    for report in get_reports(app, orgs, only, since, until, require_score):
         # Row
         table.add_row(
-            e["id"],
-            published,
-            updated,
-            status,
-            ", ".join(scores),
-            e["Org"]["name"],
-            key_event,
-            e["info"],
-            # attributes.get("capability"),
-            # attributes.get("impact-on-capability"),
-            # attributes.get("event-status"),
-            # attributes.get("overview"),
-            # attributes.get("actions-taken-and-results"),
+            report.id,
+            report.published,
+            report.updated,
+            report.formatted_status,
+            ", ".join(report.scores),
+            report.org_name,
+            report.key_event_id,
+            report.title,
         )
 
     return table
@@ -356,8 +407,9 @@ def get_reports_table(
 )
 @click.option("--unscored", is_flag=True, help="Only list unscored events")
 @click.option("--scored", is_flag=True, help="Only list scored events")
+@click.option("--team", help="ID of a single team to show events for")
 @click.pass_obj
-def reports(app, live, only, since, until, unscored, scored):
+def reports(app, team, live, only, since, until, unscored, scored):
     require_score = None
     if scored:
         require_score = True
@@ -369,6 +421,7 @@ def reports(app, live, only, since, until, unscored, scored):
     def get_table():
         return get_reports_table(
             app,
+            orgs=[team] if team else app.orgs_to_review,
             only=only,
             since=since,
             until=until,
