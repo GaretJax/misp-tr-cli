@@ -422,13 +422,14 @@ def get_reports_table(
 @click.option("--team", help="ID of a single team to show events for")
 @click.pass_obj
 def reports(app, team, live, only, since, until, unscored, scored):
-    require_score = None
     if scored:
         require_score = True
     elif unscored:
         require_score = False
-    else:
+    elif scored and unscored:
         app.abort("--unscored and --scored are mutually exclusive")
+    else:
+        require_score = None
 
     def get_table():
         return get_reports_table(
