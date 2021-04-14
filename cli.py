@@ -189,7 +189,7 @@ def key_events(app):
     app.stdout.print(table)
 
 
-def get_reports_table(app):
+def get_reports_table(app, hide_approved=False):
     threat_report_object_uuid = app.misp_config["threat_report_object_uuid"]
 
     table = Table(show_lines=True)
@@ -248,6 +248,8 @@ def get_reports_table(app):
         tags = {t["id"] for t in e.get("Tag", [])}
 
         approved = app.misp_config["approved_tag_id"] in tags
+        if approved and hide_approved:
+            continue
 
         status = Text("New", style="yellow bold")
         score = None
@@ -298,15 +300,19 @@ def get_reports_table(app):
 
 @main.command()
 @click.option("--live/--no-live")
+@click.option("--hide-approved/--show-approved")
 @click.pass_obj
-def reports(app, live):
+def reports(app, live, hide_approved):
+    def get_table():
+        return get_reports_table(app, hide_approved)
+
     if live:
-        with Live(get_reports_table(app), refresh_per_second=4) as live:
+        with Live(get_table(), refresh_per_second=4) as live:
             while True:
                 time.sleep(5)
-                live.update(get_reports_table(app))
+                live.update(get_table())
     else:
-        app.stdout.print(get_reports_table(app))
+        app.stdout.print(get_table())
 
 
 @main.command()
