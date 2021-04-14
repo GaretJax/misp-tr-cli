@@ -167,7 +167,6 @@ def key_events(app):
             if obj["template_uuid"] == key_event_object_uuid:
                 for a in obj["Attribute"]:
                     attributes[a["object_relation"]] = a["value"]
-                break
         else:
             # Error, handle?
             pass
@@ -226,16 +225,18 @@ def get_reports_table(app, hide_approved=False):
             else:
                 key_event = None
 
+        for a in e["Attribute"]:
+            updated = max(updated, arrow.get(int(a["timestamp"])))
+
         # Attributes
         attributes = {}
         for obj in e["Object"]:
+            updated = max(updated, arrow.get(int(obj["timestamp"])))
             if obj["template_uuid"] == threat_report_object_uuid:
                 for a in obj["Attribute"]:
                     attributes[a["object_relation"]] = a["value"]
-                break
-        else:
-            # Error, handle?
-            pass
+            for a in obj["Attribute"]:
+                updated = max(updated, arrow.get(int(a["timestamp"])))
 
         # Status
         tags = {t["id"] for t in e.get("Tag", [])}
@@ -245,16 +246,14 @@ def get_reports_table(app, hide_approved=False):
             continue
 
         status = Text("New", style="yellow bold")
-        score = None
+        scores = []
         e = app.misp.get_event(e["id"], extended=True)["Event"]
         for subevent in e.get("extensionEvents", {}).values():
             if subevent["Orgc"]["id"] != app.misp_config["yt_org_id"]:
                 continue
             se = app.misp.get_event(subevent["id"])["Event"]
             subtags = {t["id"] for t in se.get("Tag", [])}
-            info_requested = (
-                app.misp_config["info_request_tag_id"] in subtags
-            )
+            info_requested = app.misp_config["info_request_tag_id"] in subtags
             if info_requested:
                 info_requested_at = arrow.get(int(se["publish_timestamp"]))
                 if info_requested_at > updated:
@@ -271,7 +270,12 @@ def get_reports_table(app, hide_approved=False):
                     ):
                         for a in obj["Attribute"]:
                             if a["object_relation"] == "score":
-                                score = a["value"]
+                                scores.append(
+                                    (int(a["timestamp"]), a["value"])
+                                )
+
+        scores = [s[1] for s in sorted(scores)]
+
         if approved:
             status = Text("Approved", style="green")
 
@@ -288,7 +292,7 @@ def get_reports_table(app, hide_approved=False):
             published,
             updated,
             status,
-            str(score) if score else "",
+            ", ".join(scores),
             e["Org"]["name"],
             key_event,
             e["info"],
@@ -381,16 +385,43 @@ def feedback(app, event_id):
     )
 
 
+def get_scoring_event(app, original_event, create=True):
+    try:
+        extension_events = original_event.extensionEvents
+    except AttributeError:
+        pass
+    else:
+        for subevent in extension_events.values():
+            if subevent["Orgc"]["id"] != app.misp_config["yt_org_id"]:
+                continue
+            se = app.misp.get_event(subevent["id"], pythonify=True)
+            try:
+                subtags = {t.id for t in se.tags}
+            except AttributeError:
+                pass
+            else:
+                if app.misp_config["score_tag_id"] in subtags:
+                    return se, False
+
+    scoring_event = pymisp.MISPEvent()
+    scoring_event.info = (
+        f"Scoring TR-{original_event.id}: {original_event.info}"
+    )
+    scoring_event.extends_uuid = original_event.uuid
+    scoring_event.distribution = DISTRIBUTION_OWN_ORG_ONLY
+    return scoring_event, True
+
+
 @main.command()
 @click.pass_obj
 @click.argument("event_id")
 def score(app, event_id):
-    original_event = app.misp.get_event(event_id, pythonify=True)
+    original_event = app.misp.get_event(
+        event_id, extended=True, pythonify=True
+    )
     tags = {t.id for t in original_event.tags}
     if app.misp_config["threat_report_tag_id"] not in tags:
         app.abort("This event is not a threat report.")
-
-    # TODO: Check and update attributes if they exist already
 
     # Get data
     scorevalue = click.prompt(
@@ -402,12 +433,7 @@ def score(app, event_id):
         app.abort("Scoring aborted.")
 
     # Create data structures
-    scoring_event = pymisp.MISPEvent()
-    scoring_event.info = (
-        f"Scoring TR-{original_event.id}: {original_event.info}"
-    )
-    scoring_event.extends_uuid = original_event.uuid
-    scoring_event.distribution = DISTRIBUTION_OWN_ORG_ONLY
+    scoring_event, created = get_scoring_event(app, original_event)
 
     scoring_object = pymisp.MISPObject("ls21-scoring-object")
     scoring_object.template_uuid = app.misp_config["scoring_object_uuid"]
@@ -416,8 +442,11 @@ def score(app, event_id):
     scoring_object.add_attribute("comment", justification, type="text")
 
     # Sync to MISP
-    scoring_event = app.misp.add_event(scoring_event, pythonify=True)
-    app.misp.tag(scoring_event, app.misp_config["score_tag_id"], local=False)
+    if created:
+        scoring_event = app.misp.add_event(scoring_event, pythonify=True)
+        app.misp.tag(
+            scoring_event, app.misp_config["score_tag_id"], local=True
+        )
     app.misp.add_object(scoring_event, scoring_object)
 
     app.stdout.print(
