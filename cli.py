@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import datetime
 import time
 import configparser
 import logging
@@ -22,6 +23,23 @@ DEFAULT_MISP_PROFILE = "default"
 DATETIME_FORMAT = "MM/DD HHmm[Z]"
 DISTRIBUTION_OWN_ORG_ONLY = 0
 DISTRIBUTION_SHARING_GROUP = 4
+
+
+class TimestampType(click.ParamType):
+    name = "timestamp"
+
+    def convert(self, value, param, ctx):
+        if not value.endswith("Z"):
+            self.fail("expected time in Zulu time zone")
+
+        if len(value) != 5:
+            self.fail("please only provide the time in HHMM format")
+
+        hours, minutes = value[:2], value[2:4]
+        time = datetime.time(int(hours), int(minutes))
+
+        timestamp = datetime.datetime.combine(datetime.date.today(), time)
+        return arrow.get(timestamp, datetime.timezone.utc)
 
 
 @attr.s
@@ -188,7 +206,9 @@ def key_events(app):
     app.stdout.print(table)
 
 
-def get_reports_table(app, hide_approved=False):
+def get_reports_table(
+    app, only=None, since=None, until=None, require_score=None
+):
     threat_report_object_uuid = app.misp_config["threat_report_object_uuid"]
 
     table = Table(show_lines=True)
@@ -238,11 +258,17 @@ def get_reports_table(app, hide_approved=False):
             for a in obj["Attribute"]:
                 updated = max(updated, arrow.get(int(a["timestamp"])))
 
+        if since and updated < since:
+            continue
+
+        if until and published > until:
+            continue
+
         # Status
         tags = {t["id"] for t in e.get("Tag", [])}
 
         approved = app.misp_config["approved_tag_id"] in tags
-        if approved and hide_approved:
+        if only and approved and "approved" not in only:
             continue
 
         status = Text("New", style="yellow bold")
@@ -286,6 +312,15 @@ def get_reports_table(app, hide_approved=False):
             updated = ""
         published = published.format(DATETIME_FORMAT)
 
+        status_key = status.plain.lower().replace(" ", "-")
+        if only and status_key not in only:
+            continue
+
+        if require_score is True and not scores:
+            continue
+        elif require_score is False and scores:
+            continue
+
         # Row
         table.add_row(
             e["id"],
@@ -308,11 +343,37 @@ def get_reports_table(app, hide_approved=False):
 
 @main.command()
 @click.option("--live/--no-live")
-@click.option("--hide-approved/--show-approved")
+@click.option("-o", "--only", multiple=True)
+@click.option(
+    "--since",
+    type=TimestampType(),
+    help="Only list events modified since the given time",
+)
+@click.option(
+    "--until",
+    type=TimestampType(),
+    help="Only list events published before the given time",
+)
+@click.option("--unscored", is_flag=True, help="Only list unscored events")
+@click.option("--scored", is_flag=True, help="Only list scored events")
 @click.pass_obj
-def reports(app, live, hide_approved):
+def reports(app, live, only, since, until, unscored, scored):
+    require_score = None
+    if scored:
+        require_score = True
+    elif unscored:
+        require_score = False
+    else:
+        app.abort("--unscored and --scored are mutually exclusive")
+
     def get_table():
-        return get_reports_table(app, hide_approved)
+        return get_reports_table(
+            app,
+            only=only,
+            since=since,
+            until=until,
+            require_score=require_score,
+        )
 
     if live:
         with Live(get_table(), refresh_per_second=4) as live:
