@@ -66,7 +66,7 @@ class App:
 )
 @click.pass_context
 def main(ctx, misp_configfile, misp_profile):
-    logger = logging.getLogger('pymisp')
+    logger = logging.getLogger("pymisp")
     logger.disabled = True
 
     stdout = Console()
@@ -323,7 +323,9 @@ def feedback(app, event_id):
 
     # Create event
     feedback_event = pymisp.MISPEvent()
-    feedback_event.info = f"More info required: {original_event.info}"
+    feedback_event.info = (
+        f"Info request for TR-{original_event.id}: {original_event.info}"
+    )
     feedback_event.extends_uuid = original_event.uuid
     feedback_event.distribution = DISTRIBUTION_SHARING_GROUP
     feedback_event.sharing_group_id = app.orgs_with_sharing_groups[
@@ -341,9 +343,9 @@ def feedback(app, event_id):
 
     # Add attributes
     message = click.edit()
-
-    if not message:
+    if message is None:
         app.abort("Feedback request aborted.")
+
     attribute = pymisp.MISPAttribute()
     attribute.category = "Other"
     attribute.type = "comment"
