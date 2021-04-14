@@ -251,31 +251,30 @@ def get_reports_table(app):
 
         status = Text("New", style="yellow bold")
         score = None
+        e = app.misp.get_event(e["id"], extended=True)["Event"]
+        for subevent in e.get("extensionEvents", {}).values():
+            if subevent["Orgc"]["id"] != app.misp_config["yt_org_id"]:
+                continue
+            se = app.misp.get_event(subevent["id"])["Event"]
+            subtags = {t["id"] for t in se.get("Tag", [])}
+            info_requested = (
+                app.misp_config["info_request_tag_id"] in subtags
+            )
+            if info_requested:
+                status = Text("Info requested", style="red")
+
+            scored = app.misp_config["score_tag_id"] in subtags
+            if scored:
+                for obj in se["Object"]:
+                    if (
+                        obj["template_uuid"]
+                        == app.misp_config["scoring_object_uuid"]
+                    ):
+                        for a in obj["Attribute"]:
+                            if a["object_relation"] == "score":
+                                score = a["value"]
         if approved:
             status = Text("Approved", style="green")
-        else:
-            e = app.misp.get_event(e["id"], extended=True)["Event"]
-            for subevent in e.get("extensionEvents", {}).values():
-                if subevent["Orgc"]["id"] != app.misp_config["yt_org_id"]:
-                    continue
-                se = app.misp.get_event(subevent["id"])["Event"]
-                subtags = {t["id"] for t in se.get("Tag", [])}
-                info_requested = (
-                    app.misp_config["info_request_tag_id"] in subtags
-                )
-                if info_requested:
-                    status = Text("Info requested", style="red")
-
-                scored = app.misp_config["score_tag_id"] in subtags
-                if scored:
-                    for obj in se["Object"]:
-                        if (
-                            obj["template_uuid"]
-                            == app.misp_config["scoring_object_uuid"]
-                        ):
-                            for a in obj["Attribute"]:
-                                if a["object_relation"] == "score":
-                                    score = a["value"]
 
         # Row
         table.add_row(
