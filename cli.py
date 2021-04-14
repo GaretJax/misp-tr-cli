@@ -216,13 +216,6 @@ def get_reports_table(app, hide_approved=False):
         published = arrow.get(int(e["publish_timestamp"]))
         updated = arrow.get(int(e["timestamp"]))
 
-        if updated > published:
-            updated = Text(updated.format(DATETIME_FORMAT))
-            updated.stylize("bold magenta")
-        else:
-            updated = ""
-        published = published.format(DATETIME_FORMAT)
-
         # Key event
         key_event_uuid = e.get("extends_uuid")
         key_event = None
@@ -263,7 +256,11 @@ def get_reports_table(app, hide_approved=False):
                 app.misp_config["info_request_tag_id"] in subtags
             )
             if info_requested:
-                status = Text("Info requested", style="red")
+                info_requested_at = arrow.get(int(se["publish_timestamp"]))
+                if info_requested_at > updated:
+                    status = Text("Info requested", style="red")
+                else:
+                    status = Text("Updated", style="blue bold")
 
             scored = app.misp_config["score_tag_id"] in subtags
             if scored:
@@ -277,6 +274,13 @@ def get_reports_table(app, hide_approved=False):
                                 score = a["value"]
         if approved:
             status = Text("Approved", style="green")
+
+        if updated > published:
+            updated = Text(updated.format(DATETIME_FORMAT))
+            updated.stylize("bold magenta")
+        else:
+            updated = ""
+        published = published.format(DATETIME_FORMAT)
 
         # Row
         table.add_row(
