@@ -213,6 +213,7 @@ class ThreatReport:
     _scores = attr.ib()
     status = attr.ib()
     _key_event = attr.ib()
+    _info_request_event = attr.ib()
     published = attr.ib()
     updated = attr.ib()
 
@@ -250,6 +251,14 @@ class ThreatReport:
     @property
     def formatted_status(self):
         return self.STATUSES[self.status]
+
+    @property
+    def info_request_feedback(self):
+        if not self._info_request_event:
+            return None
+
+        for a in self._info_request_event["Attribute"]:
+            return a["value"]
 
     @property
     def overall_score(self):
@@ -317,6 +326,7 @@ def get_reports(
         status = "new"
         scores = []
         e = app.misp.get_event(e["id"], extended=True)["Event"]
+        info_request_event = None
         for subevent in e.get("extensionEvents", {}).values():
             if subevent["Orgc"]["id"] != app.misp_config["yt_org_id"]:
                 continue
@@ -329,6 +339,7 @@ def get_reports(
                     status = "info-requested"
                 else:
                     status = "updated"
+                info_request_event = se
 
             scored = app.misp_config["score_tag_id"] in subtags
             if scored:
@@ -368,6 +379,7 @@ def get_reports(
         yield ThreatReport(
             event=e,
             key_event=key_event,
+            info_request_event=info_request_event,
             published=published,
             updated=updated,
             status=status,
@@ -464,11 +476,12 @@ def reports(app, team, live, only, since, until, unscored, scored):
 @click.argument("team_id", type=int)
 @click.pass_obj
 def team_report(app, team_id, since, until):
-    table = Table(show_lines=True)
+    from rich import box
+    table = Table(box=box.ROUNDED)
     table.add_column("ID", justify="right")
-    table.add_column("Key event", no_wrap=True)
-    table.add_column("Status")
-    table.add_column("Scores", justify="right")
+    table.add_column("Key event", justify="right")
+    table.add_column("Status", justify="center")
+    table.add_column("Score", justify="right")
     table.add_column("Comments")
 
     reports_by_status = {k: 0 for k in ThreatReport.STATUSES}
@@ -476,19 +489,31 @@ def team_report(app, team_id, since, until):
 
     for report in get_reports(app, [team_id], since=since, until=until):
         reports_by_status[report.status] += 1
+
+        feedback = Text()
+        feedback.append(report.title, style="deep_sky_blue4")
+        if report.info_request_feedback:
+            feedback.append(
+                "\n" + report.info_request_feedback.strip(), style="grey66"
+            )
+        if report._scores:
+            for s in report._scores:
+                feedback.append("\n" + s[2].strip())
+        feedback.append("\n")
+
         table.add_row(
             report.id,
             report.key_event_id,
             report.formatted_status,
             ", ".join(str(s) for s in report.scores),
-            "\n".join(s[2] for s in report._scores),
+            feedback,
         )
         if report.overall_score is not None:
             scores.append(report.overall_score)
 
     app.stdout.print(table)
 
-    table = Table(show_footer=True)
+    table = Table(show_footer=True, box=box.ROUNDED)
     table.add_column("Status", footer="Total")
     table.add_column(
         "Reports", justify="right", footer=str(sum(reports_by_status.values()))
@@ -498,7 +523,7 @@ def team_report(app, team_id, since, until):
     app.stdout.print(table)
 
     if scores:
-        table = Table(show_header=False)
+        table = Table(show_header=False, box=box.ROUNDED)
         table.add_column()
         table.add_column()
         table.add_row("Average", "{:.2f}".format(sum(scores) / len(scores)))
