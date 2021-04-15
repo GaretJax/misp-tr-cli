@@ -22,27 +22,43 @@ from pymisp.mispevent import _make_datetime, MISPAttribute, MISPObject
 
 
 def patched_attr_setattr(self, name, value):
-    if name in ['first_seen', 'last_seen']:
+    if name in ["first_seen", "last_seen"]:
         _datetime = _make_datetime(value)
 
-        if name == 'last_seen' and hasattr(self, 'first_seen') and self.first_seen > _datetime:
+        if (
+            name == "last_seen"
+            and hasattr(self, "first_seen")
+            and self.first_seen > _datetime
+        ):
             _datetime = self.first_seen
-        if name == 'first_seen' and hasattr(self, 'last_seen') and self.last_seen < _datetime:
+        if (
+            name == "first_seen"
+            and hasattr(self, "last_seen")
+            and self.last_seen < _datetime
+        ):
             _datetime = self.last_seen
         super(MISPAttribute, self).__setattr__(name, _datetime)
-    elif name == 'data':
+    elif name == "data":
         self._prepare_data(value)
     else:
         super(MISPAttribute, self).__setattr__(name, value)
 
 
 def patched_obj_setattr(self, name, value):
-    if name in ['first_seen', 'last_seen']:
+    if name in ["first_seen", "last_seen"]:
         value = _make_datetime(value)
 
-        if name == 'last_seen' and hasattr(self, 'first_seen') and self.first_seen > value:
+        if (
+            name == "last_seen"
+            and hasattr(self, "first_seen")
+            and self.first_seen > value
+        ):
             value = self.first_seen
-        if name == 'first_seen' and hasattr(self, 'last_seen') and self.last_seen < value:
+        if (
+            name == "first_seen"
+            and hasattr(self, "last_seen")
+            and self.last_seen < value
+        ):
             value = self.last_seen
     super(MISPObject, self).__setattr__(name, value)
 
@@ -303,6 +319,24 @@ class ThreatReport:
         )
         return score
 
+    def _extract_monitors(self, attrs):
+        for a in attrs:
+            for t in a.get("Tag", []):
+                if t["name"] == "yt_monitor":
+                    break
+            else:
+                continue
+            yield (a["type"], a["value"])
+
+    @property
+    def monitors(self):
+        for a in self._extract_monitors(self._event["Attribute"]):
+            yield a
+
+        for obj in self._event["Object"]:
+            for a in self._extract_monitors(obj["Attribute"]):
+                yield a
+
 
 def get_reports(
     app, orgs, only=None, since=None, until=None, require_score=None
@@ -523,6 +557,7 @@ def team_report(app, team_id, since, until):
 
     reports_by_status = {k: 0 for k in ThreatReport.STATUSES}
     scores = []
+    all_monitors = set()
 
     for report in get_reports(app, [team_id], since=since, until=until):
         reports_by_status[report.status] += 1
@@ -536,6 +571,13 @@ def team_report(app, team_id, since, until):
         if report._scores:
             for s in report._scores:
                 feedback.append("\n" + s[2].strip())
+
+        monitors = set(report.monitors)
+        if monitors:
+            feedback.append(
+                f"\n {len(monitors)} monitors ", style="white on blue"
+            )
+        all_monitors = all_monitors.union(monitors)
         feedback.append("\n")
 
         table.add_row(
@@ -557,6 +599,18 @@ def team_report(app, team_id, since, until):
     )
     for k, v in reports_by_status.items():
         table.add_row(ThreatReport.STATUSES[k], str(v))
+    app.stdout.print(table)
+
+    monitors_by_type = {}
+    for k, v in all_monitors:
+        monitors_by_type.setdefault(k, 0)
+        monitors_by_type[k] += 1
+    table = Table(show_footer=True, box=box.ROUNDED)
+    table.add_column("Type", footer="Total")
+    table.add_column("Indicators", justify="right", footer=str(len(all_monitors)))
+
+    for k, v in monitors_by_type.items():
+        table.add_row(k, str(v))
     app.stdout.print(table)
 
     if scores:
@@ -678,7 +732,7 @@ def score(app, event_id):
     )
 
     justification = click.edit()
-    if justification is None:
+    if not justification:
         app.abort("Scoring aborted.")
 
     # Create data structures
