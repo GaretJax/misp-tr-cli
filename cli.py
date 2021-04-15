@@ -18,6 +18,38 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from pymisp.mispevent import _make_datetime, MISPAttribute, MISPObject
+
+
+def patched_attr_setattr(self, name, value):
+    if name in ['first_seen', 'last_seen']:
+        _datetime = _make_datetime(value)
+
+        if name == 'last_seen' and hasattr(self, 'first_seen') and self.first_seen > _datetime:
+            _datetime = self.first_seen
+        if name == 'first_seen' and hasattr(self, 'last_seen') and self.last_seen < _datetime:
+            _datetime = self.last_seen
+        super(MISPAttribute, self).__setattr__(name, _datetime)
+    elif name == 'data':
+        self._prepare_data(value)
+    else:
+        super(MISPAttribute, self).__setattr__(name, value)
+
+
+def patched_obj_setattr(self, name, value):
+    if name in ['first_seen', 'last_seen']:
+        value = _make_datetime(value)
+
+        if name == 'last_seen' and hasattr(self, 'first_seen') and self.first_seen > value:
+            value = self.first_seen
+        if name == 'first_seen' and hasattr(self, 'last_seen') and self.last_seen < value:
+            value = self.last_seen
+    super(MISPObject, self).__setattr__(name, value)
+
+
+MISPAttribute.__setattr__ = patched_attr_setattr
+MISPObject.__setattr__ = patched_obj_setattr
+
 
 DEFAULT_MISP_CONFIGFILE = os.path.expanduser("~/.config/misp")
 DEFAULT_MISP_PROFILE = "default"
@@ -287,6 +319,7 @@ def get_reports(
         # Timestamps
         published = arrow.get(int(e["publish_timestamp"]))
         updated = arrow.get(int(e["timestamp"]))
+        updated = max(published, updated)
 
         # Key event
         key_event_uuid = e.get("extends_uuid")
@@ -325,6 +358,8 @@ def get_reports(
 
         status = "new"
         scores = []
+        info_requested_at = None
+        info_request_event = None
         e = app.misp.get_event(e["id"], extended=True)["Event"]
         info_request_event = None
         for subevent in e.get("extensionEvents", {}).values():
@@ -332,14 +367,11 @@ def get_reports(
                 continue
             se = app.misp.get_event(subevent["id"])["Event"]
             subtags = {t["id"] for t in se.get("Tag", [])}
-            info_requested = app.misp_config["info_request_tag_id"] in subtags
-            if info_requested:
-                info_requested_at = arrow.get(int(se["publish_timestamp"]))
-                if info_requested_at > updated:
-                    status = "info-requested"
-                else:
-                    status = "updated"
-                info_request_event = se
+            if app.misp_config["info_request_tag_id"] in subtags:
+                ts = arrow.get(int(se["publish_timestamp"]))
+                if not info_request_event or ts > info_requested_at:
+                    info_requested_at = ts
+                    info_request_event = se
 
             scored = app.misp_config["score_tag_id"] in subtags
             if scored:
@@ -358,15 +390,13 @@ def get_reports(
 
                         scores.append((int(obj["timestamp"]), score, comment))
 
+        if info_requested_at:
+            status = "info-requested"
+            if published > info_requested_at:
+                status = "updated"
+
         if approved:
             status = "approved"
-
-        if updated > published:
-            updated = Text(updated.format(DATETIME_FORMAT))
-            updated.stylize("bold magenta")
-        else:
-            updated = ""
-        published = published.format(DATETIME_FORMAT)
 
         if only and status not in only:
             continue
@@ -401,11 +431,17 @@ def get_reports_table(
     table.add_column("Name")
 
     for report in get_reports(app, orgs, only, since, until, require_score):
-        # Row
+        if report.updated > report.published:
+            updated = Text(
+                report.updated.format(DATETIME_FORMAT), style="magenta bold"
+            )
+        else:
+            updated = ""
+
         table.add_row(
             report.id,
-            report.published,
-            report.updated,
+            report.published.format(DATETIME_FORMAT),
+            updated,
             report.formatted_status,
             ", ".join(str(s) for s in report.scores),
             report.org_name,
@@ -477,6 +513,7 @@ def reports(app, team, live, only, since, until, unscored, scored):
 @click.pass_obj
 def team_report(app, team_id, since, until):
     from rich import box
+
     table = Table(box=box.ROUNDED)
     table.add_column("ID", justify="right")
     table.add_column("Key event", justify="right")
@@ -628,7 +665,10 @@ def score(app, event_id):
     original_event = app.misp.get_event(
         event_id, extended=True, pythonify=True
     )
-    tags = {t.id for t in original_event.tags}
+    try:
+        tags = {t.id for t in original_event.tags}
+    except AttributeError:
+        tags = set()
     if app.misp_config["threat_report_tag_id"] not in tags:
         app.abort("This event is not a threat report.")
 
