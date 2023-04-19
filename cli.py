@@ -194,6 +194,57 @@ def browse(app, event_id):
     url = urljoin(app.misp_config["endpoint"], f"events/view/{event_id}")
     webbrowser.open(url)
 
+@main.command()
+@click.pass_obj
+def events(app):
+    table = Table(show_lines=True)
+    table.add_column("ID", justify="right")
+    table.add_column("Team", no_wrap=True)
+    table.add_column("Published", no_wrap=True)
+    #table.add_column("Updated", no_wrap=True)
+    table.add_column("Name")
+    table.add_column("Attribute")
+
+    for e in app.misp.search(
+        org=app.orgs_to_review
+    ):
+        e = e["Event"]
+
+        # Timestamps
+        published = arrow.get(int(e["publish_timestamp"]))
+        updated = arrow.get(int(e["timestamp"]))
+
+        if updated > published:
+            updated = Text(updated.format(DATETIME_FORMAT))
+            updated.stylize("bold magenta")
+        else:
+            updated = ""
+        published = published.format(DATETIME_FORMAT)
+
+        # Attributes
+        attrTable = Table( show_header=False, show_edge=False, show_lines=True)
+        attrTable.add_column("Category")
+        attrTable.add_column("Type")
+        attrTable.add_column("Value", justify="left")
+        attrTable.add_column("Has Tag", justify="center")
+
+        for attObj in e["Attribute"]:
+            hasTag = None
+            if 'Tag' in attObj and len(attObj['Tag']) > 0:
+                hasTag = 'X'
+            attrTable.add_row(attObj['category'], attObj['type'], attObj['value'], hasTag)
+
+        # Row
+        table.add_row(
+            e["id"],
+            e["Orgc"]["name"],
+            published,
+            #updated,
+            e["info"],
+            attrTable
+        )
+    app.stdout.print(table)
+
 
 @main.command()
 @click.pass_obj
@@ -628,10 +679,11 @@ def team_report(app, team_id, since, until):
 @click.pass_obj
 def approve(app, event_id):
     event = app.misp.get_event(event_id)["Event"]
+
     tags = {t["id"] for t in event["Tag"]}
 
-    if app.misp_config["threat_report_tag_id"] not in tags:
-        app.abort("This event is not a threat report.")
+    #if app.misp_config["threat_report_tag_id"] not in tags:
+    #    app.abort("This event is not a threat report.")
 
     if app.misp_config["approved_tag_id"] in tags:
         app.abort("This event is already approved.", style="yellow")
