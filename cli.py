@@ -194,9 +194,14 @@ def browse(app, event_id):
     url = urljoin(app.misp_config["endpoint"], f"events/view/{event_id}")
     webbrowser.open(url)
 
+@click.option(
+    "--since",
+    type=TimestampType(),
+    help="Only list events modified since the given time",
+)
 @main.command()
 @click.pass_obj
-def events(app):
+def events(app, since):
     table = Table(show_lines=True)
     table.add_column("ID", justify="right")
     table.add_column("Team", no_wrap=True)
@@ -204,10 +209,11 @@ def events(app):
     #table.add_column("Updated", no_wrap=True)
     table.add_column("Name")
     table.add_column("Attribute")
-    table.add_column("Approved")
+    table.add_column("Approved", style="green")
 
     for e in app.misp.search(
-        org=app.orgs_to_review
+        org=app.orgs_to_review,
+        event_timestamp=since.timestamp() if since else None # Only return attributes from events that have received a modification after the given timestamp.
     ):
         e = e["Event"]
 
