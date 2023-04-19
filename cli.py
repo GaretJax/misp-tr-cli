@@ -204,6 +204,7 @@ def events(app):
     #table.add_column("Updated", no_wrap=True)
     table.add_column("Name")
     table.add_column("Attribute")
+    table.add_column("Approved")
 
     for e in app.misp.search(
         org=app.orgs_to_review
@@ -220,6 +221,9 @@ def events(app):
         else:
             updated = ""
         published = published.format(DATETIME_FORMAT)
+
+        tags = {t["id"] for t in e.get("Tag", [])}
+        approved = app.misp_config["approved_tag_id"] in tags
 
         # Attributes
         attrTable = Table( show_header=False, show_edge=False, show_lines=True)
@@ -241,7 +245,8 @@ def events(app):
             published,
             #updated,
             e["info"],
-            attrTable
+            attrTable,
+            u'\u2713' if approved else ''
         )
     app.stdout.print(table)
 
